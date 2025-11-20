@@ -11,7 +11,7 @@ import requests
 from dotenv import load_dotenv
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG, format='%(levelname)s: %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 
@@ -100,15 +100,20 @@ def load_config() -> FusekiConfig:
 # ---------------------------------------------------------------------------
 
 
-def build_sparql_query(days: int) -> str:
+def build_articles_query(days: int) -> str:
     """
     Build a SPARQL query that groups articles by mema:published_day
     for the last `days` days (inclusive of today).
-
-    We let Fuseki compute 'today' using NOW() and subtract an xsd:dayTimeDuration.
+    
+    We calculate the date range in Python to ensure consistent timezone handling.
     """
-    # SPARQL duration literal, e.g. "P30D"^^xsd:dayTimeDuration
-    duration_literal = f'"P{days}D"^^xsd:dayTimeDuration'
+    # Calculate today and start date in Python to avoid timezone issues
+    today = dt.date.today()
+    start_date = today - dt.timedelta(days=days - 1)  # -1 because we include today
+    
+    # Format dates as SPARQL date literals
+    today_literal = f'"{today.isoformat()}"^^xsd:date'
+    start_date_literal = f'"{start_date.isoformat()}"^^xsd:date'
 
     return f"""
 PREFIX rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -119,18 +124,12 @@ SELECT
   ?published_day
   (COUNT(?article) AS ?count)
 WHERE {{
-  # compute today and {days} days ago
-  BIND(NOW() AS ?nowDt)
-  BIND(xsd:date(?nowDt) AS ?today)
-  BIND(?nowDt - {duration_literal} AS ?startDt)
-  BIND(xsd:date(?startDt) AS ?startDate)
-
-  # match articles in the last {days} days
+  # match articles in the date range {start_date} to {today}
   ?article rdf:type mema:Article ;
            mema:published_day ?published_day .
   FILTER(
-    xsd:date(?published_day) >= ?startDate &&
-    xsd:date(?published_day) <= ?today
+    xsd:date(?published_day) >= {start_date_literal} &&
+    xsd:date(?published_day) <= {today_literal}
   )
 }}
 GROUP BY
@@ -138,12 +137,58 @@ GROUP BY
 ORDER BY
   DESC(xsd:date(?published_day))
 """
-    # (no LIMIT: we just filter by date window)
 
 
-def execute_sparql_query(config: FusekiConfig, query: str) -> List[Dict[str, Any]]:
+def build_mentions_query(days: int) -> str:
+    """
+    Build a SPARQL query that counts total mentions per day for the last `days` days.
+    
+    This query directly counts all mentions per day without nested subqueries,
+    providing the total number of mentions found in the graph for every article of a given day.
+    """
+    # Calculate today and start date in Python to ensure consistent timezone handling
+    today = dt.date.today()
+    start_date = today - dt.timedelta(days=days - 1)  # -1 because we include today
+    
+    # Format dates as SPARQL date literals
+    today_literal = f'"{today.isoformat()}"^^xsd:date'
+    start_date_literal = f'"{start_date.isoformat()}"^^xsd:date'
+
+    return f"""
+PREFIX rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX mema:  <http://ilmanifesto.it/ontology#>
+PREFIX xsd:   <http://www.w3.org/2001/XMLSchema#>
+
+SELECT
+  ?published_day
+  (COUNT(?sign) AS ?total_mentions)
+WHERE {{
+  # match articles and their mentions in the date range {start_date} to {today}
+  ?article rdf:type           mema:Article ;
+           mema:published_day  ?published_day ;
+           mema:yields ?sign .
+  ?sign a mema:Mention .
+  
+  FILTER(
+    xsd:date(?published_day) >= {start_date_literal} &&
+    xsd:date(?published_day) <= {today_literal}
+  )
+}}
+GROUP BY
+  ?published_day
+ORDER BY
+  DESC(xsd:date(?published_day))
+"""
+
+
+def execute_sparql_query(config: FusekiConfig, query: str, timeout: int = 30) -> List[Dict[str, Any]]:
     """
     Execute a SPARQL SELECT query against Fuseki and return the 'bindings' list.
+    
+    Args:
+        config: Fuseki configuration
+        query: SPARQL query string
+        timeout: Request timeout in seconds (default: 30)
     """
     url = config.query_url
     headers = {
@@ -153,11 +198,20 @@ def execute_sparql_query(config: FusekiConfig, query: str) -> List[Dict[str, Any
         "query": query,
     }
 
-    resp = requests.get(url, headers=headers, params=params, timeout=30)
-    resp.raise_for_status()
+    logger.debug(f"Executing SPARQL query against: {url}")
+    logger.debug(f"Query: {query}")
+
+    resp = requests.get(url, headers=headers, params=params, timeout=timeout)
+    
+    if resp.status_code != 200:
+        logger.error(f"HTTP Error {resp.status_code}: {resp.text}")
+        resp.raise_for_status()
 
     data = resp.json()
-    return data.get("results", {}).get("bindings", [])
+    bindings = data.get("results", {}).get("bindings", [])
+    logger.debug(f"Query returned {len(bindings)} bindings")
+    
+    return bindings
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +224,8 @@ class DaySummary:
     date: dt.date
     weekday: str
     count: int
+    total_mentions: int = 0
+    avg_mentions_per_article: float = 0.0
 
 
 def parse_results_to_day_summaries(bindings: List[Dict[str, Any]]) -> List[DaySummary]:
@@ -243,50 +299,70 @@ def main(argv: List[str]) -> int:
         return 1
 
     # Test endpoint connectivity
-    logger.debug(f"Testing endpoint pattern 1: {config.query_url}")
     try:
-        test_response = requests.get(config.query_url, timeout=10)
-        logger.debug(f"Pattern 1 - Status: {test_response.status_code}")
-        if test_response.status_code == 200:
-            logger.debug(f"SUCCESS: Found working endpoint at: {config.query_url}")
-        else:
+        # Test with a simple SPARQL query instead of just GET
+        test_query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
+        test_params = {"query": test_query}
+        test_response = requests.get(config.query_url, params=test_params, timeout=10)
+        if test_response.status_code != 200:
             logger.warning(f"Endpoint returned status {test_response.status_code}")
     except requests.RequestException as e:
         logger.error(f"Failed to reach endpoint {config.query_url}: {e}")
         return 1
 
-    # Log current date/time for debugging
-    now = dt.datetime.now()
-    logger.debug(f"Current execution time: {now.isoformat()}")
-    logger.debug(f"User timezone: {os.getenv('TZ', 'Not set')}")
-
-    query = build_sparql_query(days=args.days)
+    # Build and execute articles query
+    articles_query = build_articles_query(days=args.days)
 
     try:
-        bindings = execute_sparql_query(config, query)
+        article_bindings = execute_sparql_query(config, articles_query)
     except requests.RequestException as e:
-        print(f"HTTP error querying Fuseki: {e}", file=sys.stderr)
+        print(f"HTTP error querying Fuseki for articles: {e}", file=sys.stderr)
         return 1
     except ValueError as e:
-        print(f"Error parsing Fuseki response: {e}", file=sys.stderr)
+        print(f"Error parsing Fuseki article response: {e}", file=sys.stderr)
         return 1
 
-    summaries = parse_results_to_day_summaries(bindings)
+    # Build and execute mentions query
+    mentions_query = build_mentions_query(days=args.days)
+
+    try:
+        # Use longer timeout for mentions query as it processes more data
+        mention_bindings = execute_sparql_query(config, mentions_query, timeout=120)
+    except requests.RequestException as e:
+        logger.warning(f"HTTP error querying Fuseki for mentions: {e}")
+        logger.info("Skipping mentions data due to timeout or connection issues")
+        mention_bindings = []
+    except ValueError as e:
+        logger.warning(f"Error parsing Fuseki mention response: {e}")
+        logger.info("Skipping mentions data due to parsing issues")
+        mention_bindings = []
+
+    # Parse article results
+    summaries = parse_results_to_day_summaries(article_bindings)
     
-    # Log all summaries for debugging
-    logger.debug(f"Total days found in query: {len(summaries)}")
+    # Parse mention results into a dictionary for efficient lookup
+    mentions_by_day = {}
+    for binding in mention_bindings:
+        published_val = binding["published_day"]["value"]
+        total_mentions_val = binding["total_mentions"]["value"]
+        
+        d = dt.date.fromisoformat(published_val)
+        total_mentions = int(total_mentions_val)
+        mentions_by_day[d] = total_mentions
+    
+    # Combine article counts with mention counts and calculate averages
     for summary in summaries:
-        logger.debug(f"Day: {summary.date} ({summary.weekday}), Count: {summary.count}")
+        summary.total_mentions = mentions_by_day.get(summary.date, 0)
+        # Calculate average mentions per article (avoid division by zero)
+        if summary.count > 0:
+            summary.avg_mentions_per_article = summary.total_mentions / summary.count
+        else:
+            summary.avg_mentions_per_article = 0.0
     
     suspicious_days = find_suspicious_days(
         summaries,
         threshold=config.num_daily_articles_threshold,
     )
-    
-    # Log suspicious days filtering
-    logger.debug(f"Suspicious days found: {len(suspicious_days)}")
-    for day in suspicious_days:
-        logger.debug(f"Suspicious: {day.date} ({day.weekday}), Count: {day.count} < {config.num_daily_articles_threshold}")
 
     print(
         f"Checking last {args.days} days (excluding Mondays) "
@@ -294,11 +370,20 @@ def main(argv: List[str]) -> int:
     )
     print()
 
+    # Always show summary of all days first
+    print("SUMMARY OF ALL DAYS:")
+    print(f"{'Date':<12} {'Weekday':<10} {'Articles':>8} {'Mentions':>8} {'Avg Mentions':>12}")
+    print("-" * 54)
+    for s in summaries:
+        print(f"{s.date.isoformat():<12} {s.weekday:<10} {s.count:>8} {s.total_mentions:>8} {s.avg_mentions_per_article:>12.1f}")
+    print()
+
+    # Then show suspicious days if any
     if not suspicious_days:
         print("No non-Monday days found with article counts below threshold.")
         return 0
 
-    # Simple table-like output
+    print("SUSPICIOUS DAYS (below threshold):")
     print(f"{'Date':<12} {'Weekday':<10} {'Count':>5}")
     print("-" * 30)
     for s in suspicious_days:
