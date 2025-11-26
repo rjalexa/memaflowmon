@@ -207,7 +207,7 @@ class Monitor:
         articles = []
         for item in items:
             headline = item.get("headline") or "(No Headline)"
-            slug_raw = item.get("slug") or ""
+            slug_raw = item.get("slug")
 
             # Date handling
             pub_full = item.get("datePublished")
@@ -221,15 +221,21 @@ class Monitor:
             if not edition_date:
                 continue
 
-            # Construct URI
-            slug = slugify(headline)
+            # --- KEY CHANGE: URI Construction ---
+            # Prioritize the Directus 'slug' field.
+            # Only use slugify(headline) if 'slug' is missing.
+            if slug_raw and str(slug_raw).strip():
+                slug = str(slug_raw).strip()
+            else:
+                slug = slugify(headline)
+
             uri = f"http://ilmanifesto.it/kg/article#{pub_date}-{slug}"
 
             articles.append(
                 Article(
                     id=str(item.get("id")),
                     headline=headline,
-                    slug=slug_raw,
+                    slug=slug,
                     published_date=pub_date,
                     edition_date=edition_date[:10],
                     uri=uri,
