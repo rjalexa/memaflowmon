@@ -30,7 +30,6 @@ except ImportError:
     def send_email(*args, **kwargs) -> bool:
         return False
 
-
 try:
     from system_info import get_hostname_and_ip
 
@@ -185,8 +184,9 @@ class Monitor:
         url = f"{self.cfg.directus_base_url}/items/articles"
         headers = {"Authorization": f"Bearer {self.cfg.directus_jwt}"}
 
-        # Sort by editionDate to help debugging
+        # Added filter[status][_eq] = published to ignore drafts
         params = {
+            "filter[status][_eq]": "published",
             "filter[syncSource][_eq]": "wp",
             "filter[articleEdition][editionDate][_gte]": start_date,
             "filter[articleEdition][editionDate][_lte]": end_date,
@@ -385,12 +385,10 @@ def generate_csv_report(reports: List[DayReport]):
     filename = f"{output_dir}/{timestamp}_missing_from_graph.csv"
 
     try:
-        with open(filename, mode="w", newline="", encoding="utf-8") as f:
+        with open(filename, mode='w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             # Write Header
-            writer.writerow(
-                ["edition_date", "directus_id", "web_url", "expected_mema_uri"]
-            )
+            writer.writerow(["edition_date", "directus_id", "web_url", "expected_mema_uri"])
 
             # Write Rows
             for a in missing_all:
@@ -481,13 +479,8 @@ def send_alert_email(reports: List[DayReport], config: Config):
 
 def main():
     parser = argparse.ArgumentParser(description="Directus vs Fuseki Integrity Monitor")
-    # Made arguments optional using nargs='?'
-    parser.add_argument(
-        "start", nargs="?", help="Start Date (YYYY-MM-DD), defaults to today"
-    )
-    parser.add_argument(
-        "end", nargs="?", help="End Date (YYYY-MM-DD), defaults to start date"
-    )
+    parser.add_argument("start", nargs='?', help="Start Date (YYYY-MM-DD), defaults to today")
+    parser.add_argument("end", nargs='?', help="End Date (YYYY-MM-DD), defaults to start date")
     args = parser.parse_args()
 
     # Determine dates
@@ -515,7 +508,6 @@ def main():
 
     if reports:
         logger.warning(f"Found {len(reports)} days with integrity issues.")
-        # Generate CSV before sending email
         generate_csv_report(reports)
         send_alert_email(reports, config)
     else:
