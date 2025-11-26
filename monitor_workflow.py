@@ -333,7 +333,7 @@ class Monitor:
                     a for a in day_articles if not a.exists_in_graph
                 ]
 
-                # --- Smart Logic for Requirements B & C ---
+                # --- Smart Logic for Requirements ---
                 is_monday = day.weekday() == 0
 
                 if report.total_articles == 0:
@@ -395,20 +395,17 @@ def send_alert_email(reports: List[DayReport], config: Config):
         html.append(f"<div class='day-header'><strong>Date: {r.date}</strong></div>")
         html.append("<ul>")
 
-        # Requirement C: Directus warning in red
+        # Requirement C: Directus warning in red, and explicit label
         if r.low_article_count:
             html.append(
-                f"<li class='error'>Directus low article count: {r.total_articles} "
+                f"<li class='error'>Directus edition article count: {r.total_articles} "
                 f"(Threshold: {config.num_daily_articles_threshold})</li>"
             )
-        else:
-            html.append(f"<li>Article Count: {r.total_articles} (OK)</li>")
 
-        # Mention Count (Only relevant if we have articles, handled by run logic,
-        # but visually we only show error if flag is set)
+        # Requirement: Explicit label, only show if low
         if r.low_mention_count:
             html.append(
-                f"<li class='error'>Low Mention Count: {r.total_mentions} "
+                f"<li class='error'>Graph mention count for edition: {r.total_mentions} "
                 f"(Threshold: {config.num_daily_mentions_threshold})</li>"
             )
 
