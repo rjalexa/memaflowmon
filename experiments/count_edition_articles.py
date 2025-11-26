@@ -102,7 +102,7 @@ class DirectusClient:
             # Extract date from the nested articleEdition object
             article_edition = article.get("articleEdition", {})
             edition_date = article_edition.get("editionDate")
-            
+
             if edition_date:
                 # Extract just the date part (YYYY-MM-DD)
                 date_only = edition_date[:10]
