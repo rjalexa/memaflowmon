@@ -5,6 +5,7 @@ Directus vs Fuseki Integrity Monitor (Async)
 
 import argparse
 import asyncio
+import csv
 import datetime as dt
 import logging
 import os
@@ -28,6 +29,7 @@ except ImportError:
 
     def send_email(*args, **kwargs) -> bool:
         return False
+
 
 try:
     from system_info import get_hostname_and_ip
@@ -221,9 +223,7 @@ class Monitor:
             if not edition_date:
                 continue
 
-            # --- KEY CHANGE: URI Construction ---
             # Prioritize the Directus 'slug' field.
-            # Only use slugify(headline) if 'slug' is missing.
             if slug_raw and str(slug_raw).strip():
                 slug = str(slug_raw).strip()
             else:
@@ -346,16 +346,12 @@ class Monitor:
                     # Case: No articles found in Directus
                     if is_monday:
                         # Requirement B: Monday with 0 articles is normal.
-                        # No issue. Skip checks.
                         continue
                     else:
                         # Requirement B: Non-Monday with 0 articles is an anomaly.
-                        # We flag low articles, but we DO NOT flag low mentions
-                        # (missing edition implies 0 mentions, don't double report).
                         report.low_article_count = True
                 else:
-                    # Case: Articles exist (Monday special edition OR regular day)
-                    # Check thresholds normally
+                    # Case: Articles exist
                     if report.total_articles < self.cfg.num_daily_articles_threshold:
                         report.low_article_count = True
 
@@ -371,6 +367,38 @@ class Monitor:
 # ---------------------------------------------------------------------------
 # Reporting & Alerting
 # ---------------------------------------------------------------------------
+
+
+def generate_csv_report(reports: List[DayReport]):
+    """Generates a CSV file for all missing articles."""
+    missing_all = []
+    for r in reports:
+        missing_all.extend(r.missing_articles)
+
+    if not missing_all:
+        return
+
+    output_dir = "output"
+    os.makedirs(output_dir, exist_ok=True)
+
+    timestamp = dt.datetime.now().strftime("%Y%m%d")
+    filename = f"{output_dir}/{timestamp}_missing_from_graph.csv"
+
+    try:
+        with open(filename, mode="w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            # Write Header
+            writer.writerow(
+                ["edition_date", "directus_id", "web_url", "expected_mema_uri"]
+            )
+
+            # Write Rows
+            for a in missing_all:
+                writer.writerow([a.edition_date, a.id, a.web_url, a.uri])
+
+        logger.info(f"CSV Report generated: {filename}")
+    except Exception as e:
+        logger.error(f"Failed to generate CSV report: {e}")
 
 
 def send_alert_email(reports: List[DayReport], config: Config):
@@ -401,14 +429,12 @@ def send_alert_email(reports: List[DayReport], config: Config):
         html.append(f"<div class='day-header'><strong>Date: {r.date}</strong></div>")
         html.append("<ul>")
 
-        # Requirement C: Directus warning in red, and explicit label
         if r.low_article_count:
             html.append(
                 f"<li class='error'>Directus edition article count: {r.total_articles} "
                 f"(Threshold: {config.num_daily_articles_threshold})</li>"
             )
 
-        # Requirement: Explicit label, only show if low
         if r.low_mention_count:
             html.append(
                 f"<li class='error'>Graph mention count for edition: {r.total_mentions} "
@@ -423,7 +449,6 @@ def send_alert_email(reports: List[DayReport], config: Config):
 
         if r.missing_articles:
             html.append("<table>")
-            # Requirement A: Web Column
             html.append(
                 "<tr><th>ID</th><th>Headline</th><th>Web</th><th>Expected URI</th></tr>"
             )
@@ -456,9 +481,19 @@ def send_alert_email(reports: List[DayReport], config: Config):
 
 def main():
     parser = argparse.ArgumentParser(description="Directus vs Fuseki Integrity Monitor")
-    parser.add_argument("start", help="Start Date (YYYY-MM-DD)")
-    parser.add_argument("end", help="End Date (YYYY-MM-DD)")
+    # Made arguments optional using nargs='?'
+    parser.add_argument(
+        "start", nargs="?", help="Start Date (YYYY-MM-DD), defaults to today"
+    )
+    parser.add_argument(
+        "end", nargs="?", help="End Date (YYYY-MM-DD), defaults to start date"
+    )
     args = parser.parse_args()
+
+    # Determine dates
+    today = dt.date.today().isoformat()
+    start_date = args.start if args.start else today
+    end_date = args.end if args.end else start_date
 
     try:
         config = load_config()
@@ -470,7 +505,7 @@ def main():
 
     # Run Async Loop
     try:
-        reports = asyncio.run(monitor.run(args.start, args.end))
+        reports = asyncio.run(monitor.run(start_date, end_date))
     except KeyboardInterrupt:
         logger.info("Interrupted by user.")
         sys.exit(0)
@@ -480,6 +515,8 @@ def main():
 
     if reports:
         logger.warning(f"Found {len(reports)} days with integrity issues.")
+        # Generate CSV before sending email
+        generate_csv_report(reports)
         send_alert_email(reports, config)
     else:
         logger.info("✓ All checks passed. No anomalies found.")
