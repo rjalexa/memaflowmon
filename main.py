@@ -11,11 +11,11 @@ import requests
 from dotenv import load_dotenv
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 # Enable debug logging for Directus client
-directus_logger = logging.getLogger('DirectusClient')
+directus_logger = logging.getLogger("DirectusClient")
 directus_logger.setLevel(logging.DEBUG)
 
 
@@ -40,14 +40,14 @@ class FusekiConfig:
         base = self.service.rstrip("/")
         dataset = self.dataset.strip("/")
         endpoint = self.endpoint
-        
+
         # Remove trailing slash from endpoint if present
         endpoint = endpoint.rstrip("/")
-        
+
         # ensure endpoint starts with a single leading slash
         if not endpoint.startswith("/"):
             endpoint = "/" + endpoint
-            
+
         return f"{base}/{dataset}{endpoint}"
 
 
@@ -108,13 +108,13 @@ def build_articles_query(days: int) -> str:
     """
     Build a SPARQL query that groups articles by mema:published_day
     for the last `days` days (inclusive of today).
-    
+
     We calculate the date range in Python to ensure consistent timezone handling.
     """
     # Calculate today and start date in Python to avoid timezone issues
     today = dt.date.today()
     start_date = today - dt.timedelta(days=days - 1)  # -1 because we include today
-    
+
     # Format dates as SPARQL date literals
     today_literal = f'"{today.isoformat()}"^^xsd:date'
     start_date_literal = f'"{start_date.isoformat()}"^^xsd:date'
@@ -146,14 +146,14 @@ ORDER BY
 def build_mentions_query(days: int) -> str:
     """
     Build a SPARQL query that counts total mentions per day for the last `days` days.
-    
+
     This query directly counts all mentions per day without nested subqueries,
     providing the total number of mentions found in the graph for every article of a given day.
     """
     # Calculate today and start date in Python to ensure consistent timezone handling
     today = dt.date.today()
     start_date = today - dt.timedelta(days=days - 1)  # -1 because we include today
-    
+
     # Format dates as SPARQL date literals
     today_literal = f'"{today.isoformat()}"^^xsd:date'
     start_date_literal = f'"{start_date.isoformat()}"^^xsd:date'
@@ -185,10 +185,12 @@ ORDER BY
 """
 
 
-def execute_sparql_query(config: FusekiConfig, query: str, timeout: int = 30) -> List[Dict[str, Any]]:
+def execute_sparql_query(
+    config: FusekiConfig, query: str, timeout: int = 30
+) -> List[Dict[str, Any]]:
     """
     Execute a SPARQL SELECT query against Fuseki and return the 'bindings' list.
-    
+
     Args:
         config: Fuseki configuration
         query: SPARQL query string
@@ -206,7 +208,7 @@ def execute_sparql_query(config: FusekiConfig, query: str, timeout: int = 30) ->
     logger.debug(f"Query: {query}")
 
     resp = requests.get(url, headers=headers, params=params, timeout=timeout)
-    
+
     if resp.status_code != 200:
         logger.error(f"HTTP Error {resp.status_code}: {resp.text}")
         resp.raise_for_status()
@@ -214,7 +216,7 @@ def execute_sparql_query(config: FusekiConfig, query: str, timeout: int = 30) ->
     data = resp.json()
     bindings = data.get("results", {}).get("bindings", [])
     logger.debug(f"Query returned {len(bindings)} bindings")
-    
+
     return bindings
 
 
@@ -226,6 +228,7 @@ def execute_sparql_query(config: FusekiConfig, query: str, timeout: int = 30) ->
 @dataclass
 class DirectusConfig:
     """Configuration for Directus GraphQL API."""
+
     base_url: str
     jwt_token: str
 
@@ -267,62 +270,70 @@ def load_directus_config() -> DirectusConfig:
 
 class DirectusClient:
     """Client for interacting with Directus REST API."""
-    
+
     def __init__(self, config: DirectusConfig):
-        self.base_url = config.base_url.rstrip('/')
+        self.base_url = config.base_url.rstrip("/")
         self.jwt_token = config.jwt_token
         self.headers = {
             "Authorization": f"Bearer {config.jwt_token}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
-    
+
     def count_articles_by_date(self, target_date: str) -> int:
         """
         Count articles published on a specific date using REST API.
-        
+
         Args:
             target_date: Date in YYYY-MM-DD format
-            
+
         Returns:
             Number of articles found for the date
         """
         # Use the exact format from the working cURL command
         date_filter = f"{target_date}"
-        
+
         # Build the REST API URL with filter using the correct field
         url = f"{self.base_url}/items/articles"
         params = {
             "filter[articleEdition][editionDate][_eq]": date_filter,
             "fields": "id",  # Only get IDs to minimize response size
-            "limit": -1  # Get all matching articles
+            "limit": -1,  # Get all matching articles
         }
-        
+
         try:
             logger.debug(f"Directus single date query URL: {url}")
             logger.debug(f"Directus single date params: {params}")
-            response = requests.get(url, headers=self.headers, params=params, timeout=30)
-            
+            response = requests.get(
+                url, headers=self.headers, params=params, timeout=30
+            )
+
             if response.status_code != 200:
-                logger.error(f"Directus REST API error {response.status_code}: {response.text}")
+                logger.error(
+                    f"Directus REST API error {response.status_code}: {response.text}"
+                )
                 return 0
-            
+
             data = response.json()
             count = len(data.get("data", []))
-            logger.debug(f"Directus single date response for {target_date}: {count} articles")
+            logger.debug(
+                f"Directus single date response for {target_date}: {count} articles"
+            )
             return count
-            
+
         except requests.RequestException as e:
             logger.error(f"Directus REST API request failed: {e}")
             return 0
-    
-    def count_articles_by_date_range(self, start_date: str, end_date: str) -> Dict[str, int]:
+
+    def count_articles_by_date_range(
+        self, start_date: str, end_date: str
+    ) -> Dict[str, int]:
         """
         Count articles for each date in a range using REST API.
-        
+
         Args:
             start_date: Start date in YYYY-MM-DD format
             end_date: End date in YYYY-MM-DD format
-            
+
         Returns:
             Dictionary mapping dates to article counts
         """
@@ -332,22 +343,28 @@ class DirectusClient:
             "filter[articleEdition][editionDate][_gte]": start_date,
             "filter[articleEdition][editionDate][_lte]": end_date,
             "fields": "id,articleEdition.editionDate",  # Get ID and date from the correct field
-            "limit": -1  # Get all results
+            "limit": -1,  # Get all results
         }
-        
+
         try:
             logger.debug(f"Directus range query URL: {url}")
             logger.debug(f"Directus range params: {params}")
-            response = requests.get(url, headers=self.headers, params=params, timeout=30)
-            
+            response = requests.get(
+                url, headers=self.headers, params=params, timeout=30
+            )
+
             if response.status_code != 200:
-                logger.error(f"Directus REST API error {response.status_code}: {response.text}")
+                logger.error(
+                    f"Directus REST API error {response.status_code}: {response.text}"
+                )
                 return {}
-            
+
             data = response.json()
             articles = data.get("data", [])
-            logger.debug(f"Directus range query returned {len(articles)} articles total")
-            
+            logger.debug(
+                f"Directus range query returned {len(articles)} articles total"
+            )
+
             # Count by date
             date_counts = {}
             for article in articles:
@@ -358,14 +375,13 @@ class DirectusClient:
                     # Extract just the date part (YYYY-MM-DD)
                     date_only = edition_date[:10]
                     date_counts[date_only] = date_counts.get(date_only, 0) + 1
-            
+
             logger.debug(f"Directus date counts: {date_counts}")
             return date_counts
-            
+
         except requests.RequestException as e:
             logger.error(f"Directus REST API request failed: {e}")
             return {}
-    
 
 
 # ---------------------------------------------------------------------------
@@ -427,39 +443,44 @@ def find_suspicious_days(
 # Directus convenience functions
 # ---------------------------------------------------------------------------
 
-def count_articles_for_date(date_str: str, config: Optional[DirectusConfig] = None) -> int:
+
+def count_articles_for_date(
+    date_str: str, config: Optional[DirectusConfig] = None
+) -> int:
     """
     Convenience function to count articles for a specific date.
-    
+
     Args:
         date_str: Date in YYYY-MM-DD format
         config: Optional DirectusConfig, will load from .env if not provided
-        
+
     Returns:
         Number of articles found for the date
     """
     if config is None:
         config = load_directus_config()
-    
+
     client = DirectusClient(config)
     return client.count_articles_by_date(date_str)
 
 
-def count_articles_for_date_range(start_date: str, end_date: str, config: Optional[DirectusConfig] = None) -> Dict[str, int]:
+def count_articles_for_date_range(
+    start_date: str, end_date: str, config: Optional[DirectusConfig] = None
+) -> Dict[str, int]:
     """
     Convenience function to count articles for a date range.
-    
+
     Args:
         start_date: Start date in YYYY-MM-DD format
         end_date: End date in YYYY-MM-DD format
         config: Optional DirectusConfig, will load from .env if not provided
-        
+
     Returns:
         Dictionary mapping dates to article counts
     """
     if config is None:
         config = load_directus_config()
-    
+
     client = DirectusClient(config)
     return client.count_articles_by_date_range(start_date, end_date)
 
@@ -499,13 +520,15 @@ def main(argv: List[str]) -> int:
     try:
         directus_config = load_directus_config()
         logger.info(f"Directus config loaded successfully: {directus_config.base_url}")
-        
+
         # Test Directus connectivity with a simple request
         directus_client = DirectusClient(directus_config)
         test_date = "2002-12-03"  # Use a date we know exists from working_directus.py
         test_count = directus_client.count_articles_by_date(test_date)
-        logger.info(f"Directus connectivity test: {test_count} articles found for {test_date}")
-        
+        logger.info(
+            f"Directus connectivity test: {test_count} articles found for {test_date}"
+        )
+
     except Exception as e:
         logger.error(f"Directus configuration or connectivity test failed: {e}")
         logger.info("Will proceed without Directus data")
@@ -552,17 +575,17 @@ def main(argv: List[str]) -> int:
 
     # Parse article results
     summaries = parse_results_to_day_summaries(article_bindings)
-    
+
     # Parse mention results into a dictionary for efficient lookup
     mentions_by_day = {}
     for binding in mention_bindings:
         published_val = binding["published_day"]["value"]
         total_mentions_val = binding["total_mentions"]["value"]
-        
+
         d = dt.date.fromisoformat(published_val)
         total_mentions = int(total_mentions_val)
         mentions_by_day[d] = total_mentions
-    
+
     # Fetch Directus article counts if available
     directus_counts_by_day = {}
     if directus_config:
@@ -572,21 +595,25 @@ def main(argv: List[str]) -> int:
             start_date = min(s.date for s in summaries).isoformat()
             end_date = max(s.date for s in summaries).isoformat()
             logger.info(f"Directus date range: {start_date} to {end_date}")
-            
+
             directus_client = DirectusClient(directus_config)
-            directus_counts_by_day = directus_client.count_articles_by_date_range(start_date, end_date)
-            logger.info(f"Retrieved Directus counts for {len(directus_counts_by_day)} dates")
+            directus_counts_by_day = directus_client.count_articles_by_date_range(
+                start_date, end_date
+            )
+            logger.info(
+                f"Retrieved Directus counts for {len(directus_counts_by_day)} dates"
+            )
             logger.debug(f"Directus counts: {directus_counts_by_day}")
-            
+
             # Test today specifically
             today = dt.date.today().isoformat()
             today_count = directus_client.count_articles_by_date(today)
             logger.info(f"Directus count for today ({today}): {today_count}")
-            
+
         except Exception as e:
             logger.error(f"Failed to fetch Directus article counts: {e}")
             directus_counts_by_day = {}
-    
+
     # Combine article counts with mention counts and Directus counts, then calculate averages
     for summary in summaries:
         summary.total_mentions = mentions_by_day.get(summary.date, 0)
@@ -596,7 +623,7 @@ def main(argv: List[str]) -> int:
             summary.avg_mentions_per_article = summary.total_mentions / summary.count
         else:
             summary.avg_mentions_per_article = 0.0
-    
+
     suspicious_days = find_suspicious_days(
         summaries,
         threshold=config.num_daily_articles_threshold,
@@ -610,10 +637,14 @@ def main(argv: List[str]) -> int:
 
     # Always show summary of all days first
     print("SUMMARY OF ALL DAYS:")
-    print(f"{'Date':<12} {'Weekday':<10} {'Articles':>8} {'Directus':>8} {'Mentions':>8} {'Avg Mentions':>12}")
+    print(
+        f"{'Date':<12} {'Weekday':<10} {'Articles':>8} {'Directus':>8} {'Mentions':>8} {'Avg Mentions':>12}"
+    )
     print("-" * 63)
     for s in summaries:
-        print(f"{s.date.isoformat():<12} {s.weekday:<10} {s.count:>8} {s.directus_count:>8} {s.total_mentions:>8} {s.avg_mentions_per_article:>12.1f}")
+        print(
+            f"{s.date.isoformat():<12} {s.weekday:<10} {s.count:>8} {s.directus_count:>8} {s.total_mentions:>8} {s.avg_mentions_per_article:>12.1f}"
+        )
     print()
 
     # Then show suspicious days if any
