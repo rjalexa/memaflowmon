@@ -15,7 +15,9 @@ sys.path.insert(0, str(src_path))
 
 
 # Load the memaflowmon module from src directory
-spec = importlib.util.spec_from_file_location("memaflowmon", src_path / "memaflowmon.py")
+spec = importlib.util.spec_from_file_location(
+    "memaflowmon", src_path / "memaflowmon.py"
+)
 if spec is None or spec.loader is None:
     raise ImportError("Could not load memaflowmon module")
 

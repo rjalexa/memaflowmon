@@ -21,7 +21,10 @@ from dotenv import load_dotenv
 
 # Optional Integrations
 try:
-    from .sendmail import send_email
+    try:
+        from .sendmail import send_email
+    except (ImportError, ValueError):
+        from sendmail import send_email
 
     SENDMAIL_AVAILABLE = True
 except ImportError:
@@ -30,8 +33,12 @@ except ImportError:
     def send_email(*args, **kwargs) -> bool:
         return False
 
+
 try:
-    from .system_info import get_hostname_and_ip
+    try:
+        from .system_info import get_hostname_and_ip
+    except (ImportError, ValueError):
+        from system_info import get_hostname_and_ip
 
     SYSTEM_INFO_AVAILABLE = True
 except ImportError:
@@ -297,8 +304,63 @@ class Monitor:
             except Exception as e:
                 logger.error(f"Failed checking {article.uri}: {e}")
 
-    async def run(self, start_date: str, end_date: str) -> List[DayReport]:
+    async def check_connectivity(self) -> Optional[str]:
+        """
+        Checks connectivity to backends.
+        Returns None if all good, or name of failed service.
+        """
+        if not self.session:
+            return "Internal Error (No Session)"
+
+        # Check Directus
+        try:
+            # Try /server/ping first (fastest)
+            url = f"{self.cfg.directus_base_url}/server/ping"
+            async with self.session.get(
+                url, timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status != 200:
+                    # Fallback: Try listing 1 article to verify API access
+                    url2 = f"{self.cfg.directus_base_url}/items/articles"
+                    params = {"limit": 1, "fields": "id"}
+                    headers = {"Authorization": f"Bearer {self.cfg.directus_jwt}"}
+                    async with self.session.get(
+                        url2,
+                        headers=headers,
+                        params=params,
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as resp2:
+                        if resp2.status != 200:
+                            return f"Directus ({self.cfg.directus_base_url}) - Status {resp2.status}"
+        except Exception as e:
+            return f"Directus ({self.cfg.directus_base_url}) - {str(e)}"
+
+        # Check Fuseki
+        try:
+            params = {"query": "ASK {}"}
+            async with self.session.get(
+                self.cfg.fuseki_query_url,
+                params=params,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    return (
+                        f"Fuseki ({self.cfg.fuseki_query_url}) - Status {resp.status}"
+                    )
+        except Exception as e:
+            return f"Fuseki ({self.cfg.fuseki_query_url}) - {str(e)}"
+
+        return None
+
+    async def run(self, start_date: str, end_date: str) -> Optional[List[DayReport]]:
         async with self:
+            # 0. Check Connectivity
+            failed_service = await self.check_connectivity()
+            if failed_service:
+                logger.error(f"Connectivity check failed: {failed_service}")
+                send_connectivity_alert(failed_service)
+                return None
+
             # 1. Fetch Source Data
             articles = await self.fetch_directus_articles(start_date, end_date)
             # We continue even if articles is empty to report on missing editions
@@ -385,10 +447,12 @@ def generate_csv_report(reports: List[DayReport]):
     filename = f"{output_dir}/{timestamp}_missing_from_graph.csv"
 
     try:
-        with open(filename, mode='w', newline='', encoding='utf-8') as f:
+        with open(filename, mode="w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             # Write Header
-            writer.writerow(["edition_date", "directus_id", "web_url", "expected_mema_uri"])
+            writer.writerow(
+                ["edition_date", "directus_id", "web_url", "expected_mema_uri"]
+            )
 
             # Write Rows
             for a in missing_all:
@@ -397,6 +461,30 @@ def generate_csv_report(reports: List[DayReport]):
         logger.info(f"CSV Report generated: {filename}")
     except Exception as e:
         logger.error(f"Failed to generate CSV report: {e}")
+
+
+def send_connectivity_alert(failed_service: str):
+    hostname = get_hostname_and_ip().get("hostname", "unknown")
+    subject = f"[ALERT] Connectivity Issue - {hostname}"
+
+    body = f"""
+    <html><body>
+    <h2>Connectivity Alert</h2>
+    <p>MeMaFlow monitor could not reach the following service:</p>
+    <h3>{failed_service}</h3>
+    <p>The integrity check was aborted.</p>
+    </body></html>
+    """
+
+    if SENDMAIL_AVAILABLE:
+        try:
+            send_email(subject_override=subject, body_override=body, html_body=True)
+            logger.info(f"Connectivity alert sent for {failed_service}.")
+        except Exception as e:
+            logger.error(f"Failed to send email: {e}")
+    else:
+        logger.warning("Email module not available. Dumping alert to stdout.")
+        print(f"Connectivity Alert: {failed_service} is unreachable.")
 
 
 def send_alert_email(reports: List[DayReport], config: Config):
@@ -479,8 +567,12 @@ def send_alert_email(reports: List[DayReport], config: Config):
 
 def main():
     parser = argparse.ArgumentParser(description="Directus vs Fuseki Integrity Monitor")
-    parser.add_argument("start", nargs='?', help="Start Date (YYYY-MM-DD), defaults to today")
-    parser.add_argument("end", nargs='?', help="End Date (YYYY-MM-DD), defaults to start date")
+    parser.add_argument(
+        "start", nargs="?", help="Start Date (YYYY-MM-DD), defaults to today"
+    )
+    parser.add_argument(
+        "end", nargs="?", help="End Date (YYYY-MM-DD), defaults to start date"
+    )
     args = parser.parse_args()
 
     # Determine dates
@@ -504,6 +596,9 @@ def main():
         sys.exit(0)
     except Exception as e:
         logger.critical(f"Runtime Error: {e}")
+        sys.exit(1)
+
+    if reports is None:
         sys.exit(1)
 
     if reports:

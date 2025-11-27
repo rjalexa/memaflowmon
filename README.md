@@ -1,210 +1,123 @@
-# Directus GraphQL Integration
+# MeMaFlow Monitor
 
-This project includes a clean, well-structured function/class for querying the Directus backend using GraphQL to count articles by date.
+**Directus vs Fuseki Integrity Monitor**
+
+`memaflowmon` is an asynchronous integrity monitoring tool designed to verify consistency between **Directus** (the CMS/Source of Truth) and **Apache Jena Fuseki** (the Knowledge Graph). It ensures that articles published in Directus are correctly ingested, indexed, and present in the Knowledge Graph.
 
 ## Features
 
-- **DirectusConfig**: Configuration class for Directus GraphQL API
-- **DirectusClient**: Client class for executing GraphQL queries
-- **Convenience functions**: Simple wrappers for common use cases
-- **Flexible date handling**: Support for both single dates and date ranges
-- **Error handling**: Robust error handling with logging
-- **Environment configuration**: Uses `.env` for secure credential management
+- **Integrity Verification**: Fetches published articles from Directus and verifies their existence in Fuseki.
+- **Mention Counting**: Checks if articles have associated mentions in the graph.
+- **Threshold Monitoring**: Alerts if the daily article count or mention count falls below configured thresholds.
+- **Asynchronous Execution**: Uses `aiohttp` and `asyncio` for high-performance concurrent checks.
+- **Reporting**:
+  - Generates CSV reports for missing articles.
+  - Sends HTML email alerts with detailed summaries.
+- **Connectivity Checks**: Verifies access to Directus and Fuseki before running logic.
 
-## Files
+## Prerequisites
 
-- `main.py` - Contains the Directus GraphQL functionality integrated with existing SPARQL functionality
-- `example_directus.py` - Example script demonstrating how to use the Directus features
-- `.env.template` - Template for environment variables
-- `README.md` - This documentation
+- **Python 3.13+**
+- **uv** (recommended) or `pip` for dependency management.
+- Access to a **Directus** instance (API URL & Token).
+- Access to a **Fuseki** SPARQL endpoint.
+- An SMTP server for sending email alerts.
 
-## Quick Start
+## Installation
 
-1. **Set up environment variables:**
+1. **Clone the repository:**
    ```bash
-   cp .env.template .env
-   ```
-   
-   Edit `.env` and add your Directus configuration:
-   ```env
-   DIRECTUS_BASE_URL=https://directus.ilmanifesto.it
-   DIRECTUS_JWT=your_jwt_token_here
+   git clone <repository-url>
+   cd directusmon
    ```
 
-2. **Run the example:**
+2. **Install dependencies:**
+   Using `uv` (recommended):
    ```bash
-   python example_directus.py
+   uv sync
    ```
-
-## Usage Examples
-
-### Basic Usage
-
-```python
-from main import count_articles_for_date, count_articles_for_date_range
-
-# Count articles for a specific date
-article_count = count_articles_for_date("2025-11-20")
-print(f"Found {article_count} articles")
-
-# Count articles for a date range
-date_counts = count_articles_for_date_range("2025-11-18", "2025-11-20")
-for date, count in date_counts.items():
-    print(f"{date}: {count} articles")
-```
-
-### Advanced Usage
-
-```python
-from main import DirectusClient, load_directus_config
-
-# Load configuration
-config = load_directus_config()
-
-# Create client
-client = DirectusClient(config)
-
-# Execute queries
-count = client.count_articles_by_date("2025-11-20")
-range_counts = client.count_articles_by_date_range("2025-11-18", "2025-11-20")
-```
+   Or using `pip`:
+   ```bash
+   pip install .
+   ```
 
 ## Configuration
 
-The system uses environment variables for configuration:
+1. Copy the template configuration file:
+   ```bash
+   cp .env.template .env
+   ```
 
-### Required Variables
+2. Edit `.env` with your specific settings:
 
-- `DIRECTUS_BASE_URL`: The base URL of your Directus instance (e.g., `https://directus.ilmanifesto.it`)
-- `DIRECTUS_JWT`: JWT token for authentication (from your Directus backend)
+   **Fuseki Settings:**
+   - `FUSEKI_SERVICE`: Base URL of the Fuseki server (e.g., `http://localhost:3030`).
+   - `FUSEKI_DATASET`: Name of the dataset (e.g., `memav7`).
+   - `FUSEKI_ENDPOINT`: Query endpoint (default: `/query/`).
 
-### Optional Variables
+   **Directus Settings:**
+   - `DIRECTUS_BASE_URL`: URL of your Directus instance.
+   - `DIRECTUS_JWT`: API Token for authentication.
 
-The system also supports Fuseki configuration for the existing SPARQL functionality:
-- `FUSEKI_SERVICE`
-- `FUSEKI_ENDPOINT`
-- `FUSEKI_DATASET`
-- `NUM_DAILY_ARTICLES_TRIGGER`
+   **Thresholds:**
+   - `NUM_DAILY_ARTICLES_TRIGGER`: Minimum expected articles per day (default: 30).
+   - `NUM_DAILY_MENTIONS_TRIGGER`: Minimum expected mentions per day (default: 300).
 
-## GraphQL Queries
+   **Email / SMTP:**
+   - `MAILSMTP`: SMTP server address (e.g., `smtp.example.com:587`).
+   - `MAILUSER`: SMTP username.
+   - `MAILPASS`: SMTP password.
+   - `MAILTO1`: Recipient email address (add `MAILTO2`, `MAILTO3`, etc. for more).
 
-The implementation uses optimized GraphQL queries:
+## Usage
 
-### Single Date Query
-```graphql
-query CountArticles($date: String!) {
-    articles_aggregated(
-        filter: {
-            datePublished: {
-                _eq: $date
-            }
-        }
-    ) {
-        count {
-            count
-        }
-    }
-}
-```
+Run the monitor using the command line. You can specify a date range to check.
 
-### Date Range Query
-```graphql
-query CountArticlesByRange($startDate: String!, $endDate: String!) {
-    articles_aggregated(
-        filter: {
-            datePublished: {
-                _between: [$startDate, $endDate]
-            }
-        }
-    ) {
-        groupBy {
-            datePublished
-            count {
-                count
-            }
-        }
-    }
-}
-```
-
-## API Reference
-
-### DirectusConfig
-
-Configuration class for Directus GraphQL API.
-
-**Properties:**
-- `base_url`: Base URL of Directus instance
-- `jwt_token`: JWT token for authentication
-- `graphql_url`: Computed GraphQL endpoint URL
-
-### DirectusClient
-
-Client for interacting with Directus GraphQL API.
-
-**Methods:**
-- `count_articles_by_date(target_date: str) -> int`: Count articles for a specific date
-- `count_articles_by_date_range(start_date: str, end_date: str) -> Dict[str, int]`: Count articles for a date range
-
-### Convenience Functions
-
-- `count_articles_for_date(date_str: str, config: Optional[DirectusConfig] = None) -> int`
-- `count_articles_for_date_range(start_date: str, end_date: str, config: Optional[DirectusConfig] = None) -> Dict[str, int]`
-
-## Error Handling
-
-The implementation includes comprehensive error handling:
-
-- **HTTP Errors**: Logged and handled gracefully
-- **GraphQL Errors**: Checked and reported
-- **Network Issues**: Timeout handling and connection error management
-- **Response Parsing**: Safe extraction of data with fallback values
-
-All errors are logged using Python's logging module with appropriate log levels.
-
-## Integration with Existing Code
-
-The Directus functionality is seamlessly integrated with the existing SPARQL functionality in `main.py`. Both systems can be used independently or together, sharing the same configuration and logging infrastructure.
-
-## Security Notes
-
-- **JWT Token**: Never commit the `.env` file with real tokens to version control
-- **Environment Variables**: Use environment variables for sensitive configuration
-- **HTTPS**: Always use HTTPS URLs for production deployments
-- **Token Expiry**: JWT tokens may expire and need to be refreshed periodically
-
-## Development
-
-### Requirements
-
-- Python 3.7+
-- requests
-- python-dotenv
-
-### Testing
-
-Run the example script to verify functionality:
+### Basic Usage (Check Today)
 ```bash
-python example_directus.py
+python src/memaflowmon.py
 ```
 
-### Logging
-
-Enable debug logging to see GraphQL queries and responses:
-```python
-import logging
-logging.basicConfig(level=logging.DEBUG)
+### Check a Specific Date
+```bash
+python src/memaflowmon.py 2023-10-25
 ```
 
-## Schema Adaptation
+### Check a Date Range
+```bash
+python src/memaflowmon.py 2023-10-01 2023-10-31
+```
 
-The GraphQL queries may need adjustment based on your actual Directus schema. The implementation includes comments indicating where schema-specific changes may be needed.
+## Workflow
 
-**Areas that may need customization:**
-- Field names in GraphQL queries
-- Response parsing structure
-- Aggregation methods
+1. **Connectivity Check**: The script first pings Directus and Fuseki. If either is unreachable, it sends a "Connectivity Alert" email and aborts.
+2. **Data Fetching**: It retrieves all *published* articles from Directus for the specified date range.
+3. **Graph Verification**: For every article, it queries Fuseki (concurrently) to:
+   - Confirm the article URI exists.
+   - Count the number of mentions linked to the article.
+4. **Analysis**:
+   - Compares counts against `NUM_DAILY_ARTICLES_TRIGGER` and `NUM_DAILY_MENTIONS_TRIGGER`.
+   - Identifies specific articles missing from the graph.
+   - **Note**: Mondays are treated as exceptions for low article counts (standard editorial schedule).
+5. **Reporting**:
+   - If issues are found:
+     - A CSV file listing missing articles is saved to the `output/` directory.
+     - An email alert is sent to configured recipients with a summary and list of errors.
+   - If no issues are found, it logs a success message and exits.
 
-## License
+## Output
 
-This code is provided as-is for educational and development purposes.
+- **Console Logs**: Real-time progress and error logging.
+- **CSV Reports**: Located in `output/YYYYMMDD_missing_from_graph.csv`.
+- **Email Alerts**: HTML formatted emails containing:
+  - Summary of issues.
+  - List of missing articles with links.
+  - System hostname/IP for identification.
+
+## Project Structure
+
+- `src/memaflowmon.py`: Main application logic and entry point.
+- `src/sendmail.py`: Utility for sending SMTP emails.
+- `src/system_info.py`: Utility for retrieving host system information.
+- `.env.template`: Template for environment variables.
+- `pyproject.toml`: Project metadata and dependencies.
