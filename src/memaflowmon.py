@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 
 # Optional Integrations
 try:
-    from sendmail import send_email
+    from .sendmail import send_email
 
     SENDMAIL_AVAILABLE = True
 except ImportError:
@@ -31,7 +31,7 @@ except ImportError:
         return False
 
 try:
-    from system_info import get_hostname_and_ip
+    from .system_info import get_hostname_and_ip
 
     SYSTEM_INFO_AVAILABLE = True
 except ImportError:
