@@ -4,16 +4,15 @@ Entry point for memaflowmon application
 """
 
 import sys
-import os
 from pathlib import Path
+import importlib.util
 
 # Add the src directory to Python path
 src_path = Path(__file__).parent / "src"
 sys.path.insert(0, str(src_path))
 
 # Import and run the main application
-import importlib.util
-import sys
+
 
 # Load the memaflowmon module from src directory
 spec = importlib.util.spec_from_file_location("memaflowmon", src_path / "memaflowmon.py")
